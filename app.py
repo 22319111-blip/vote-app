@@ -7,14 +7,13 @@ import re
 from io import BytesIO
 
 # =========================================================
-# 1. الإعدادات الأساسية (تم تغيير اسم ملف المستخدمين لفرض بداية نظيفة)
+# 1. الإعدادات الأساسية
 # =========================================================
 st.set_page_config(page_title="نظام إدارة الحملات - الأستاذ قصي", layout="wide")
 
-USERS_FILE = 'system_users.json' # اسم جديد لتجاوز أي خلل سابق
-MASTER_FILE = 'حلحول (1).xlsx - حَلْحُول.csv' # ملفك الأصلي
+USERS_FILE = 'system_users.json' 
+MASTER_FILE = 'Halhul_Ultimate_Perfect.csv.xlsx' # تم تثبيت اسم ملفك هنا!
 
-# تهيئة حالة الجلسة (Session State)
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.username = ''
@@ -27,29 +26,43 @@ if 'logged_in' not in st.session_state:
 # 2. خوارزميات معالجة البيانات
 # =========================================================
 def clean_family_name(text):
-    """توحيد العائلات للإحصاءات"""
     if not isinstance(text, str) or not text.strip(): return "غير محدد"
     t = text.strip()
-    t = re.sub(r'[أإآ]', 'ا', t) # توحيد الهمزات
-    t = re.sub(r'ة\b', 'ه', t)   # توحيد التاء المربوطة
-    if t.startswith('ال'): t = t[2:] # حذف ال التعريف
+    t = re.sub(r'[أإآ]', 'ا', t) 
+    t = re.sub(r'ة\b', 'ه', t)   
+    if t.startswith('ال'): t = t[2:] 
     return t.strip()
 
 def process_master_file():
-    """تحضير قاعدة البيانات عند رفعها لأول مرة"""
-    try:
-        df = pd.read_csv(MASTER_FILE, dtype=str)
-    except Exception as e:
-        st.error(f"⚠️ خطأ في قراءة الملف: {e}")
+    """محرك القراءة المخصص لملف Halhul_Ultimate_Perfect.csv.xlsx"""
+    if not os.path.exists(MASTER_FILE):
+        st.error(f"⚠️ الملف غير موجود! يرجى التأكد من وضع ملف ({MASTER_FILE}) في نفس المجلد مع الكود.")
         return pd.DataFrame()
 
-    # توحيد أسماء الأعمدة الهامة
+    df = pd.DataFrame()
+    try:
+        # المحاولة الأولى: قراءته كملف إكسل
+        df = pd.read_excel(MASTER_FILE, dtype=str)
+    except Exception as e1:
+        try:
+            # المحاولة الثانية: قراءته كملف CSV (لأن اسمه يحتوي على الامتدادين)
+            df = pd.read_csv(MASTER_FILE, dtype=str, encoding='utf-8')
+        except Exception as e2:
+            try:
+                df = pd.read_csv(MASTER_FILE, dtype=str, encoding='utf-8-sig')
+            except Exception as e3:
+                st.error("⚠️ فشلت قراءة الملف. يبدو أن الملف تالف أو بصيغة غير مدعومة.")
+                return pd.DataFrame()
+
+    if df.empty:
+        return pd.DataFrame()
+
+    # تنظيف وتجهيز الأعمدة
     if 'مركز التسجيل والاقتراع' not in df.columns and 'اسم المركز' in df.columns:
         df.rename(columns={'اسم المركز': 'مركز التسجيل والاقتراع'}, inplace=True)
     if 'رمز الناخب' not in df.columns:
         df['رمز الناخب'] = 'غير متوفر'
 
-    # معالجة الفراغات وبناء الاسم الرباعي
     cols_to_fill = ['الاسم الاول', 'اسم الاب', 'اسم الجد', 'اسم العائلة']
     for c in cols_to_fill:
         if c not in df.columns: df[c] = ''
@@ -60,24 +73,23 @@ def process_master_file():
                         df['اسم العائلة'].fillna('')
     df['الاسم الرباعي'] = df['الاسم الرباعي'].str.replace(r'\s+', ' ', regex=True).str.strip()
     
-    # بناء أعمدة الإحصاء والحالة
     df['عائلة_موحدة'] = df['اسم العائلة'].apply(clean_family_name)
     df['حالة التصويت'] = 'لم يصوت'
     
     return df
 
 def get_client_data(client_name):
-    """جلب بيانات الزبون أو إنشائها"""
     fname = f"data_{client_name}.csv"
     if os.path.exists(fname):
-        return pd.read_csv(fname, dtype=str)
+        try:
+            return pd.read_csv(fname, dtype=str, encoding='utf-8-sig')
+        except:
+            return pd.read_csv(fname, dtype=str)
     else:
-        if os.path.exists(MASTER_FILE):
-            df = process_master_file()
-            if not df.empty:
-                df.to_csv(fname, index=False, encoding='utf-8-sig')
-            return df
-        return pd.DataFrame()
+        df = process_master_file()
+        if not df.empty:
+            df.to_csv(fname, index=False, encoding='utf-8-sig')
+        return df
 
 def save_client_data(df, client_name):
     df.to_csv(f"data_{client_name}.csv", index=False, encoding='utf-8-sig')
@@ -162,10 +174,18 @@ else:
                         if new_user in users_db:
                             st.error("هذا اليوزر مستخدم من قبل!")
                         else:
+                            # 1. إنشاء الحساب
                             users_db[new_user] = {"pass": new_pass, "role": "list_admin", "client": new_list}
                             save_users_db(users_db)
-                            get_client_data(new_list) # بناء الداتا للزبون
-                            st.success(f"تم إنشاء حساب القائمة ({new_list}) بنجاح!")
+                            
+                            # 2. توليد الداتا للزبون فوراً 
+                            df = get_client_data(new_list)
+                            if not df.empty:
+                                st.success(f"تم إنشاء حساب القائمة ({new_list}) بنجاح! سجل خروج وادخل بحساب الزبون لترى الداشبورد.")
+                            else:
+                                # التراجع في حال فشل القراءة
+                                del users_db[new_user]
+                                save_users_db(users_db)
                     else:
                         st.warning("أكمل جميع الحقول.")
         
@@ -177,11 +197,9 @@ else:
                 if st.button("🚨 تدمير بيانات الزبون", type="primary"):
                     if to_delete:
                         c_name = users_db[to_delete]['client']
-                        # مسح حساب الزبون وكل مناديبه
                         users_to_del = [k for k, v in users_db.items() if v['client'] == c_name and k != 'qusai']
                         for k in users_to_del: del users_db[k]
                         save_users_db(users_db)
-                        # مسح الملف
                         if os.path.exists(f"data_{c_name}.csv"): os.remove(f"data_{c_name}.csv")
                         st.success(f"تم حذف الزبون {c_name} وكل بياناته!")
                         st.rerun()
@@ -200,8 +218,8 @@ else:
     elif ROLE == "list_admin":
         df = get_client_data(CLIENT)
         if df.empty:
-            st.error("لا يوجد بيانات! يرجى التأكد من رفع الملف الأساسي بشكل صحيح.")
-            if st.button("خروج"):
+            st.error("⚠️ لم يتم جلب البيانات. تواصل مع الدعم الفني (قصي).")
+            if st.button("تسجيل خروج"):
                 st.session_state.logged_in = False
                 st.rerun()
             st.stop()
@@ -285,7 +303,7 @@ else:
             if st.button("💾 حفظ البيانات"):
                 df.update(edited)
                 save_client_data(df, CLIENT)
-                st.success("تم الحفظ!")
+                st.success("تم الحفظ بنجاح!")
 
         elif menu == "📑 التقارير":
             st.title("📑 استخراج الكشوفات والتقارير")
