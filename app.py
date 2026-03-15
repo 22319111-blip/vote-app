@@ -4,22 +4,21 @@ import json
 import os
 import re
 from io import BytesIO
-from datetime import datetime
 
 # =========================================================
-# 1. إعدادات الهوية والبيئة
+# 1. الإعدادات الأساسية (تأكد من وجود الملف بهذا الاسم)
 # =========================================================
 st.set_page_config(page_title="منصة الأستاذ قصي الانتخابية", layout="wide")
 
 USERS_FILE = 'clients_users.json'
-MASTER_DATA = 'Halhul_Ultimate_Perfect.csv' 
+MASTER_DATA = 'Halhul_Ultimate_Perfect.csv' # الاسم الذي أكدت عليه
 
 # =========================================================
-# 2. محرك الذكاء البرمجي (Logic Functions)
+# 2. محرك الدوال (Logic)
 # =========================================================
 
 def clean_logic(name):
-    """محرك تطهير الأسماء لتوحيد العائلات"""
+    """توحيد العائلات لضمان دقة الإحصائيات"""
     if not isinstance(name, str): return ""
     name = name.strip()
     name = re.sub(r'[أإآ]', 'ا', name)
@@ -30,12 +29,12 @@ def clean_logic(name):
     return " ".join(name.split())
 
 def load_users():
+    """تحميل حسابات المشتركين"""
     if not os.path.exists(USERS_FILE):
-        # حساب المالك الافتراضي (قصي)
-        default = {"qusai": {"pass": "851998", "role": "master", "client_name": "الإدارة العامة", "is_temp": False}}
+        default_admin = {"qusai": {"pass": "851998", "role": "master", "client_name": "الادارة العامة", "is_temp": False}}
         with open(USERS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(default, f, ensure_ascii=False, indent=4)
-        return default
+            json.dump(default_admin, f, ensure_ascii=False, indent=4)
+        return default_admin
     with open(USERS_FILE, 'r', encoding='utf-8') as f:
         return json.load(f)
 
@@ -44,7 +43,7 @@ def save_users(u_dict):
         json.dump(u_dict, f, ensure_ascii=False, indent=4)
 
 def load_client_data(client_name):
-    """تحميل بيانات الزبون أو توليدها تلقائياً من الماستر"""
+    """تحميل بيانات الزبون أو إنشاء ملف جديد من الماستر"""
     filename = f"data_{client_name}.csv"
     if os.path.exists(filename):
         df = pd.read_csv(filename)
@@ -68,7 +67,14 @@ def save_client_data(df, client_name):
     temp.to_csv(filename, index=False, encoding='utf-8-sig')
 
 # =========================================================
-# 3. نظام الدخول وإدارة الجلسة
+# 3. التحقق الأولي (لمنع الشاشة الحمراء)
+# =========================================================
+if not os.path.exists(MASTER_DATA):
+    st.error(f"⚠️ تنبيه للأستاذ قصي: الملف '{MASTER_DATA}' غير موجود في المجلد. يرجى رفعه ليتمكن النظام من العمل.")
+    st.stop()
+
+# =========================================================
+# 4. نظام الدخول
 # =========================================================
 if 'auth' not in st.session_state:
     st.session_state.update({'auth': False, 'user': '', 'client': '', 'role': '', 'is_temp': False})
@@ -76,7 +82,7 @@ if 'auth' not in st.session_state:
 users_db = load_users()
 
 if not st.session_state.auth:
-    st.markdown("<h1 style='text-align: center; color: #1E3A8A;'>🏛️ منصة الأستاذ قصي للحلول الانتخابية</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center;'>🏛️ منصة الأستاذ قصي الانتخابية</h1>", unsafe_allow_html=True)
     col1, col2, col3 = st.columns([1, 1.5, 1])
     with col2:
         u_in = st.text_input("اسم المستخدم")
@@ -88,128 +94,91 @@ if not st.session_state.auth:
                     'client': users_db[u_in]['client_name'], 'is_temp': users_db[u_in].get('is_temp', False)
                 })
                 st.rerun()
-            else: st.error("⚠️ بيانات الدخول غير صحيحة")
+            else: st.error("⚠️ بيانات خاطئة")
 else:
-    # --- إعداد بيئة الزبون الحالي ---
+    # --- واجهة النظام الرئيسية ---
     CLIENT = st.session_state.client
     IS_TEMP = st.session_state.is_temp
     df_full = load_client_data(CLIENT)
     
-    # منطق الرؤية المحدودة (النسخة التجريبية)
+    # تحديد مستوى الرؤية (نسخة تجريبية vs كاملة)
     df_display = df_full.head(100) if IS_TEMP else df_full
 
-    st.sidebar.markdown(f"### 🛡️ نظام: {CLIENT}")
-    if IS_TEMP: st.sidebar.error("🚨 نسخة تجريبية محدودة")
+    st.sidebar.title(f"🛡️ نظام {CLIENT}")
+    if IS_TEMP: st.sidebar.error("🚨 نسخة تجريبية")
     
-    menu = st.sidebar.radio("القائمة الرئيسية:", ["📊 الإحصائيات", "🎯 أهداف الحسم", "📝 تسجيل الأصوات", "📑 التقارير والطباعة", "⚙️ الإدارة", "🚪 خروج"])
+    menu = st.sidebar.radio("القائمة:", ["📊 الإحصائيات", "🎯 أهداف الحسم", "📝 تسجيل الأصوات", "📑 التقارير والطباعة", "⚙️ الإدارة", "🚪 خروج"])
 
     if menu == "🚪 خروج":
         st.session_state.auth = False
         st.rerun()
 
-    # --- لوحة تحكم الأستاذ قصي (Master) ---
+    # --- لوحة التحكم (Master - قصي) ---
     if st.session_state.role == "master":
         st.sidebar.divider()
-        st.sidebar.subheader("🛠️ الإدارة العليا (قصي)")
-        admin_opt = st.sidebar.selectbox("إدارة القوائم:", ["نظرة عامة", "إضافة زبون جديد", "حذف قائمة نهائياً"])
+        st.sidebar.subheader("🛠️ تحكم المالك")
+        admin_opt = st.sidebar.selectbox("إدارة القوائم:", ["عرض", "إضافة زبون", "حذف قائمة"])
 
-        if admin_opt == "إضافة زبون جديد":
-            st.header("➕ تفعيل نظام لقائمة جديدة")
-            with st.form("add_form"):
-                nc = st.text_input("اسم القائمة/المرشح")
-                nu = st.text_input("اسم المستخدم للدخول")
+        if admin_opt == "إضافة زبون":
+            with st.form("add"):
+                nc = st.text_input("اسم القائمة")
+                nu = st.text_input("اسم المستخدم")
                 np = st.text_input("كلمة المرور")
-                it = st.checkbox("تفعيل كنسخة تجريبية (رؤية أول 100 اسم فقط)")
-                if st.form_submit_button("إنشاء النظام وتوليد البيانات"):
-                    if nc and nu:
-                        users_db[nu] = {"pass": np, "role": "owner", "client_name": nc, "is_temp": it}
-                        save_users(users_db)
-                        load_client_data(nc) # إنشاء الملف فوراً
-                        st.success(f"تم إنشاء نظام {nc} بنجاح!")
-                    else: st.error("يرجى ملء كافة الحقول")
+                it = st.checkbox("نسخة تجريبية (رؤية محدودة)")
+                if st.form_submit_button("تفعيل"):
+                    users_db[nu] = {"pass": np, "role": "owner", "client_name": nc, "is_temp": it}
+                    save_users(users_db)
+                    load_client_data(nc)
+                    st.success("تم تفعيل الزبون")
 
-        elif admin_opt == "حذف قائمة نهائياً":
-            st.header("🗑️ حذف قائمة وتدمير بياناتها")
-            st.error("⚠️ تحذير: سيتم حذف الحساب وملف الـ CSV الخاص به نهائياً.")
+        elif admin_opt == "حذف قائمة":
             targets = [u for u, info in users_db.items() if info['role'] != 'master']
-            target_u = st.selectbox("اختر الحساب المراد حذفه:", targets)
-            if st.button("تأكيد الحذف النهائي الشامل"):
-                client_to_del = users_db[target_u]['client_name']
-                if os.path.exists(f"data_{client_to_del}.csv"): os.remove(f"data_{client_to_del}.csv")
+            target_u = st.selectbox("اختر الحساب للحذف:", targets)
+            if st.button("تأكيد الحذف الشامل"):
+                c_del = users_db[target_u]['client_name']
+                if os.path.exists(f"data_{c_del}.csv"): os.remove(f"data_{c_del}.csv")
                 del users_db[target_u]
                 save_users(users_db)
-                st.success(f"تم مسح القائمة '{client_to_del}' من النظام تماماً.")
                 st.rerun()
 
-    # --- صفحات المحتوى ---
-    if df_full.empty:
-        st.error(f"الملف الماستر {MASTER_DATA} غير موجود. يرجى رفعه أولاً.")
-    else:
-        if menu == "📊 الإحصائيات":
-            st.header(f"📊 إحصائيات: {CLIENT}")
-            voted = len(df_full[df_full['حالة التصويت'] == 'تم التصويت'])
-            
-            c1, c2, c3 = st.columns(3)
-            c1.metric("الكتلة الناخبة", len(df_full) if not IS_TEMP else "100 (تجريبي)")
-            c2.metric("عدد المصوتين", voted)
-            c3.metric("نسبة الإنجاز", f"{(voted/len(df_full))*100:.1f}%")
-            
-            if IS_TEMP:
-                st.warning("🔒 التحليلات العائلية محجوبة في النسخة التجريبية.")
-            else:
-                st.subheader("📌 ترتيب العائلات ومعدل الالتزام")
-                stats = df_full.groupby('family_unified').agg(total=('الاسم الرباعي','count'), voted=('حالة التصويت', lambda x: (x=='تم التصويت').sum())).reset_index()
-                stats['النسبة'] = (stats['voted']/stats['total']*100).round(1)
-                st.dataframe(stats.sort_values(by='total', ascending=False), use_container_width=True)
+    # --- المحتوى ---
+    if menu == "📊 الإحصائيات":
+        st.header(f"📊 إحصائيات: {CLIENT}")
+        voted = len(df_full[df_full['حالة التصويت'] == 'تم التصويت'])
+        st.columns(3)[0].metric("الكتلة الناخبة", len(df_full) if not IS_TEMP else "100 (تجريبي)")
+        st.columns(3)[1].metric("المصوتين", voted)
+        st.columns(3)[2].metric("النسبة", f"{(voted/len(df_full))*100:.1f}%")
+        
+        if not IS_TEMP:
+            st.subheader("📌 التزام العائلات")
+            stats = df_full.groupby('family_unified').agg(total=('الاسم الرباعي','count'), voted=('حالة التصويت', lambda x: (x=='تم التصويت').sum())).reset_index()
+            st.dataframe(stats.sort_values(by='total', ascending=False), use_container_width=True)
 
-        elif menu == "🎯 أهداف الحسم":
-            if IS_TEMP:
-                st.error("🚫 محاكي الحسم متاح في النسخة الكاملة فقط.")
-            else:
-                st.header("🎯 محاكي الوصول لبر الأمان")
-                target = st.number_input("الرقم المستهدف للفوز:", value=1000)
-                current = len(df_full[df_full['حالة التصويت'] == 'تم التصويت'])
-                st.write(f"بقي لك **{max(0, target - current)}** صوتاً للفوز.")
-                st.progress(min(1.0, current/target) if target > 0 else 0)
+    elif menu == "📝 تسجيل الأصوات":
+        st.header("📝 الميدان")
+        search = st.text_input("🔍 ابحث:")
+        work_df = df_display.copy()
+        if search:
+            work_df = work_df[work_df['الاسم الرباعي'].str.contains(search, na=False)]
+        
+        edited = st.data_editor(work_df[['الاسم الرباعي', 'اسم العائلة', 'حالة التصويت']], use_container_width=True)
+        if st.button("💾 حفظ"):
+            df_full.update(edited)
+            save_client_data(df_full, CLIENT)
+            st.success("تم الحفظ")
 
-        elif menu == "📝 تسجيل الأصوات":
-            st.header("📝 غرفة العمليات الميدانية")
-            if IS_TEMP: st.info("💡 النسخة التجريبية تعرض أول 100 اسم فقط.")
-            
-            search = st.text_input("🔍 ابحث (الاسم أو العائلة):")
-            work_df = df_display.copy()
-            if search:
-                clean_s = clean_logic(search)
-                work_df = work_df[work_df['الاسم الرباعي'].str.contains(search, na=False) | work_df['family_unified'].str.contains(clean_s, na=False)]
-            
-            edited = st.data_editor(work_df[['الاسم الرباعي', 'اسم العائلة', 'اسم المركز', 'حالة التصويت']], use_container_width=True)
-            if st.button("💾 حفظ التحديثات"):
-                df_full.update(edited)
-                save_client_data(df_full, CLIENT)
-                st.success("✅ تم الحفظ بنجاح")
+    elif menu == "📑 التقارير والطباعة":
+        if IS_TEMP: st.error("🚫 وظيفة الطباعة محجوبة في النسخة التجريبية.")
+        else:
+            st.header("📑 التقارير")
+            sel_f = st.multiselect("اختر العائلة:", sorted(df_full['family_unified'].unique()))
+            rep = df_full[df_full['family_unified'].isin(sel_f)] if sel_f else df_full
+            st.dataframe(rep[['الاسم الرباعي', 'اسم العائلة', 'حالة التصويت']])
+            buf = BytesIO(); rep.to_excel(buf, index=False)
+            st.download_button("📥 تحميل Excel", buf.getvalue(), f"{CLIENT}.xlsx")
 
-        elif menu == "📑 التقارير والطباعة":
-            st.header("📑 استخراج الكشوفات")
-            if IS_TEMP:
-                st.error("🚫 وظيفة الطباعة معطلة في النسخة التجريبية.")
-            else:
-                col1, col2 = st.columns(2)
-                with col1: sel_f = st.multiselect("فلتر حسب العائلة:", sorted(df_full['family_unified'].unique()))
-                with col2: sel_c = st.selectbox("فلتر حسب المدرسة:", ["الكل"] + sorted(df_full['اسم المركز'].unique().tolist()))
-                
-                rep = df_full.copy()
-                if sel_f: rep = rep[rep['family_unified'].isin(sel_f)]
-                if sel_c != "الكل": rep = rep[rep['اسم المركز'] == sel_c]
-                
-                st.dataframe(rep[['الاسم الرباعي', 'اسم العائلة', 'اسم المركز', 'حالة التصويت']], use_container_width=True)
-                if not rep.empty:
-                    buf = BytesIO(); rep.to_excel(buf, index=False)
-                    st.download_button("📥 تحميل الكشف (Excel)", buf.getvalue(), f"report_{CLIENT}.xlsx")
-
-        elif menu == "⚙️ الإدارة":
-            st.header("⚙️ إدارة بيانات القائمة")
-            if st.button("🧹 تصفير كافة الأصوات (بدء يوم الانتخابات)"):
-                df_full['حالة التصويت'] = 'لم يصوت'
-                save_client_data(df_full, CLIENT)
-                st.success("تم تصفير كافة الأصوات بنجاح.")
-                st.rerun()
+    elif menu == "⚙️ الإدارة":
+        if st.button("🧹 تصفير الأصوات"):
+            df_full['حالة التصويت'] = 'لم يصوت'
+            save_client_data(df_full, CLIENT)
+            st.success("تم تصفير البيانات")
