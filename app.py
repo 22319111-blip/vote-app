@@ -6,7 +6,7 @@ import re
 from io import BytesIO
 
 # =========================================================
-# 1. إعدادات المنصة وتهيئة الجلسة (مهم جداً لتفادي الأخطاء)
+# 1. إعدادات المنصة وتهيئة الجلسة
 # =========================================================
 st.set_page_config(page_title="منصة الأستاذ قصي الانتخابية", layout="wide")
 
@@ -17,30 +17,55 @@ USERS_FILE = 'clients_users.json'
 MASTER_DATA = 'Halhul_Ultimate_Perfect.csv'
 
 # =========================================================
-# 2. حماية النظام الأساسي (تأمين الأعمدة والملفات)
+# 2. محرك الدوال الذكي (معالج البيانات الزاحفة + الفلتر)
 # =========================================================
-# تأمين وجود الملف الأم بأعمدته الأساسية لمنع خطأ KeyError
-if not os.path.exists(MASTER_DATA):
-    dummy_df = pd.DataFrame({
-        "الاسم الرباعي": ["تجربة ١", "تجربة ٢"],
-        "اسم العائلة": ["عائلة أ", "عائلة ب"],
-        "اسم المركز": ["مدرسة ١", "مدرسة ٢"],
-        "حالة التصويت": ["لم يصوت", "لم يصوت"]
-    })
-    dummy_df.to_csv(MASTER_DATA, index=False, encoding='utf-8-sig')
+def fix_shifted_data(row):
+    """طبيب البيانات: يعالج مشكلة زحف الاسم لعمود المدرسة"""
+    center = str(row.get('اسم المركز', '')).strip()
+    first_name = str(row.get('الاسم الاول', '')).strip()
+    
+    # إذا كان المركز لا يبدأ بكلمة "مدرسة" وليس فارغاً (يعني حدث زحف للبيانات)
+    if center and not center.startswith('مدرسة') and center.lower() != 'nan':
+        # إذا كان عمود "الاسم الأول" موجوداً وفيه قيمة
+        if first_name and first_name.lower() != 'nan':
+            # التأكد إذا كان الاسم الأول غير موجود في بداية النص المنزلق لمنع التكرار
+            if not center.startswith(first_name):
+                row['الاسم الرباعي'] = f"{first_name} {center}"
+            else:
+                row['الاسم الرباعي'] = center
+        else:
+            # إذا لم يتوفر الاسم الأول، نعتبر النص المنزلق هو الاسم الرباعي
+            row['الاسم الرباعي'] = center
+            
+        # نصفر المركز لعدم وجود بيانات صحيحة له
+        row['اسم المركز'] = 'غير محدد'
+        
+    return row
 
-# =========================================================
-# 3. محرك الدوال الذكي
-# =========================================================
-def clean_logic(name):
-    if not isinstance(name, str): return ""
-    name = name.strip()
-    name = re.sub(r'[أإآ]', 'ا', name)
-    name = re.sub(r'ة\b', 'ه', name)
-    name = re.sub(r'^ال', '', name)
-    name = re.sub(r'^ابو\s+', 'ابو', name)
-    name = re.sub(r'^أبو\s+', 'ابو', name)
-    return " ".join(name.split())
+def extract_and_clean_family(full_name):
+    """استخراج اسم العائلة وتطبيق التنظيف الصارم"""
+    if pd.isna(full_name) or not isinstance(full_name, str) or not full_name.strip():
+        return "غير محدد"
+    
+    clean_name = re.sub(r'\s+', ' ', full_name.strip())
+    words = clean_name.split()
+    
+    if len(words) == 1:
+        fam = words[0]
+    else:
+        prefixes = ['ابو', 'أبو', 'عبد', 'بن', 'بني', 'آل', 'الحاج', 'حاج', 'ام', 'أم']
+        if words[-2] in prefixes:
+            fam = f"{words[-2]} {words[-1]}"
+        else:
+            fam = words[-1]
+            
+    fam = re.sub(r'[أإآ]', 'ا', fam)
+    fam = re.sub(r'ة\b', 'ه', fam)
+    fam = re.sub(r'^ال', '', fam)
+    fam = re.sub(r'\s+ال', ' ', fam)
+    fam = re.sub(r'\s+', ' ', fam).strip()
+    
+    return fam
 
 def load_users():
     if not os.path.exists(USERS_FILE):
@@ -57,21 +82,33 @@ def save_users(u_dict):
 
 def load_client_data(client_name):
     filename = f"data_{client_name}.csv"
-    if os.path.exists(filename):
-        df = pd.read_csv(filename)
-    else:
-        df = pd.read_csv(MASTER_DATA)
-        if 'حالة التصويت' not in df.columns:
-            df['حالة التصويت'] = 'لم يصوت'
-        df.to_csv(filename, index=False, encoding='utf-8-sig')
-    
-    # توحيد اسم العائلة إذا كان العمود موجوداً
-    if not df.empty and 'اسم العائلة' in df.columns:
-        df['family_unified'] = df['اسم العائلة'].apply(clean_logic)
-    elif not df.empty:
-        df['family_unified'] = 'غير محدد'
+    try:
+        if os.path.exists(filename):
+            df = pd.read_csv(filename, dtype=str, keep_default_na=False)
+        else:
+            if not os.path.exists(MASTER_DATA):
+                dummy = pd.DataFrame({"الاسم الاول": ["أحمد"], "الاسم الرباعي": ["أحمد محمد علي"], "اسم المركز": ["مدرسة ١"], "حالة التصويت": ["لم يصوت"]})
+                dummy.to_csv(MASTER_DATA, index=False, encoding='utf-8-sig')
+            
+            df = pd.read_csv(MASTER_DATA, dtype=str, keep_default_na=False)
+            if 'حالة التصويت' not in df.columns:
+                df['حالة التصويت'] = 'لم يصوت'
+            df.to_csv(filename, index=False, encoding='utf-8-sig')
         
-    return df
+        # 1. تطبيق معالج البيانات الزاحفة أولاً
+        if not df.empty and 'اسم المركز' in df.columns:
+            df = df.apply(fix_shifted_data, axis=1)
+            
+        # 2. استخراج العائلة بعد تنظيف وتصحيح الاسم الرباعي
+        if not df.empty and 'الاسم الرباعي' in df.columns:
+            df['family_unified'] = df['الاسم الرباعي'].apply(extract_and_clean_family)
+            if 'اسم العائلة' not in df.columns:
+                df['اسم العائلة'] = df['family_unified']
+                
+        return df
+    except Exception as e:
+        st.error(f"⚠️ خطأ في قراءة الملف: {e}")
+        return pd.DataFrame()
 
 def save_client_data(df, client_name):
     filename = f"data_{client_name}.csv"
@@ -81,7 +118,7 @@ def save_client_data(df, client_name):
     temp.to_csv(filename, index=False, encoding='utf-8-sig')
 
 # =========================================================
-# 4. نظام تسجيل الدخول
+# 3. نظام تسجيل الدخول
 # =========================================================
 users_db = load_users()
 
@@ -102,12 +139,16 @@ if not st.session_state.auth:
                 st.error("⚠️ بيانات الدخول غير صحيحة")
 else:
     # =========================================================
-    # 5. الواجهة الرئيسية للزبون
+    # 4. الواجهة الرئيسية
     # =========================================================
     CLIENT = st.session_state.client
     IS_TEMP = st.session_state.is_temp
     df_full = load_client_data(CLIENT)
     
+    if df_full.empty:
+        st.warning("ملف البيانات فارغ أو غير موجود.")
+        st.stop()
+        
     df_display = df_full.head(100) if IS_TEMP else df_full
 
     st.sidebar.markdown(f"### 🛡️ نظام: {CLIENT}")
@@ -119,7 +160,7 @@ else:
         st.session_state.auth = False
         st.rerun()
 
-    # --- لوحة التحكم الكبرى (Master) ---
+    # --- إدارة قصي العليا ---
     if st.session_state.role == "master":
         st.sidebar.divider()
         st.sidebar.subheader("🛠️ الإدارة العليا (قصي)")
@@ -130,15 +171,14 @@ else:
                 nc = st.text_input("اسم القائمة")
                 nu = st.text_input("اسم المستخدم")
                 np = st.text_input("كلمة المرور")
-                it = st.checkbox("حساب تجريبي (رؤية 100 اسم فقط ومنع الطباعة)")
+                it = st.checkbox("حساب تجريبي (رؤية 100 اسم فقط)")
                 if st.form_submit_button("تفعيل الزبون"):
                     if nc and nu:
                         users_db[nu] = {"pass": np, "role": "owner", "client_name": nc, "is_temp": it}
                         save_users(users_db)
                         load_client_data(nc)
                         st.success(f"تم تفعيل {nc} بنجاح!")
-                    else:
-                        st.error("يرجى تعبئة الحقول")
+                        st.rerun()
 
         elif admin_opt == "حذف قائمة":
             targets = [u for u, info in users_db.items() if info['role'] != 'master']
@@ -151,10 +191,8 @@ else:
                     save_users(users_db)
                     st.success("تم المسح الشامل.")
                     st.rerun()
-            else:
-                st.info("لا يوجد زبائن حالياً.")
 
-    # --- المحتوى التفاعلي ---
+    # --- الشاشات ---
     if menu == "📊 الإحصائيات":
         st.header(f"📊 إحصائيات: {CLIENT}")
         if 'حالة التصويت' in df_full.columns:
@@ -170,13 +208,14 @@ else:
         if IS_TEMP:
             st.warning("🔒 التحليلات العائلية محجوبة في النسخة التجريبية.")
         elif 'family_unified' in df_full.columns:
-            st.subheader("📌 التزام العائلات")
+            st.subheader("📌 التزام العائلات (مستخرج آلياً ومصحح)")
             stats = df_full.groupby('family_unified').agg(
                 total=('الاسم الرباعي','count'), 
                 voted=('حالة التصويت', lambda x: (x=='تم التصويت').sum())
             ).reset_index()
-            stats['النسبة'] = (stats['voted']/stats['total']*100).round(1)
-            st.dataframe(stats.sort_values(by='total', ascending=False), use_container_width=True)
+            stats.rename(columns={'family_unified': 'اسم العائلة', 'total': 'العدد الكلي', 'voted': 'المصوتون'}, inplace=True)
+            stats['نسبة الحضور %'] = (stats['المصوتون']/stats['العدد الكلي']*100).round(1)
+            st.dataframe(stats.sort_values(by='العدد الكلي', ascending=False), use_container_width=True)
 
     elif menu == "🎯 أهداف الحسم":
         if IS_TEMP: st.error("🚫 ميزة أهداف الحسم غير متاحة في النسخة التجريبية.")
@@ -189,32 +228,39 @@ else:
 
     elif menu == "📝 الميدان والتسجيل":
         st.header("📝 غرفة العمليات الميدانية")
-        search = st.text_input("🔍 ابحث عن اسم:")
+        search = st.text_input("🔍 ابحث عن اسم (الاسم الرباعي):")
         work_df = df_display.copy()
         
         if search and 'الاسم الرباعي' in work_df.columns:
-            work_df = work_df[work_df['الاسم الرباعي'].str.contains(search, na=False)]
+            clean_search = re.sub(r'\s+', ' ', search.strip())
+            work_df = work_df[work_df['الاسم الرباعي'].str.replace(r'\s+', ' ', regex=True).str.contains(clean_search, na=False)]
         
-        # عرض الأعمدة المتاحة فقط لتجنب أي خطأ
         cols_to_show = [c for c in ['الاسم الرباعي', 'اسم العائلة', 'اسم المركز', 'حالة التصويت'] if c in work_df.columns]
         
         if cols_to_show:
             edited = st.data_editor(work_df[cols_to_show], use_container_width=True)
-            if st.button("💾 حفظ"):
+            if st.button("💾 حفظ البيانات"):
                 df_full.update(edited)
                 save_client_data(df_full, CLIENT)
-                st.success("تم الحفظ بنجاح")
-        else:
-            st.error("الأعمدة المطلوبة غير موجودة في ملف البيانات.")
+                st.success("تم الحفظ بنجاح!")
 
     elif menu == "📑 التقارير والطباعة":
         if IS_TEMP: 
             st.error("🚫 الطباعة معطلة للحسابات التجريبية.")
         else:
-            st.header("📑 التقارير")
-            if 'family_unified' in df_full.columns:
-                sel_f = st.multiselect("اختر العائلة:", sorted(df_full['family_unified'].astype(str).unique()))
-                rep = df_full[df_full['family_unified'].isin(sel_f)] if sel_f else df_full
+            st.header("📑 التقارير والكشوفات")
+            
+            # ميزة ساعات الحسم: فلترة من لم يصوت
+            unvoted_only = st.checkbox("🚨 عرض الذين لم يصوتوا فقط (لساعات الحسم)", value=False)
+            
+            rep = df_full.copy()
+            if unvoted_only and 'حالة التصويت' in rep.columns:
+                rep = rep[rep['حالة التصويت'] != 'تم التصويت']
+                
+            if 'family_unified' in rep.columns:
+                sel_f = st.multiselect("فلترة حسب العائلة:", sorted(df_full['family_unified'].astype(str).unique()))
+                if sel_f:
+                    rep = rep[rep['family_unified'].isin(sel_f)]
                 
                 cols_to_show = [c for c in ['الاسم الرباعي', 'اسم العائلة', 'اسم المركز', 'حالة التصويت'] if c in rep.columns]
                 st.dataframe(rep[cols_to_show] if cols_to_show else rep, use_container_width=True)
@@ -230,7 +276,5 @@ else:
             if 'حالة التصويت' in df_full.columns:
                 df_full['حالة التصويت'] = 'لم يصوت'
                 save_client_data(df_full, CLIENT)
-                st.success("تم التصفير.")
+                st.success("تم التصفير بنجاح.")
                 st.rerun()
-            else:
-                st.warning("عمود حالة التصويت غير موجود بعد.")
