@@ -17,11 +17,17 @@ if 'auth' not in st.session_state:
 USERS_FILE = 'clients_users.json'
 MASTER_FILE = 'حلحول (1).xlsx - حَلْحُول.csv' 
 
+# دالة إعادة التشغيل الآمنة (لتجنب أخطاء إصدارات Streamlit)
+def safe_rerun():
+    try:
+        st.rerun()
+    except AttributeError:
+        st.experimental_rerun()
+
 # =========================================================
 # 2. خوارزمية "قصي" لتنظيف العائلات وبناء البيانات
 # =========================================================
 def normalize_family(text):
-    """توحيد العائلات لغايات الإحصاء"""
     if not isinstance(text, str) or not text.strip(): return "غير محدد"
     text = text.strip()
     text = re.sub(r'[أإآ]', 'ا', text)
@@ -30,9 +36,7 @@ def normalize_family(text):
     return text.strip()
 
 def process_data(df):
-    """بناء قاعدة البيانات من الأعمدة المنفصلة وتضمين رمز الناخب"""
     df = df.copy()
-    
     if 'مركز التسجيل والاقتراع' not in df.columns and 'اسم المركز' in df.columns:
         df.rename(columns={'اسم المركز': 'مركز التسجيل والاقتراع'}, inplace=True)
     
@@ -97,13 +101,19 @@ if not st.session_state.auth:
         if st.button("دخول آمن", use_container_width=True):
             if u in users_db and users_db[u]['pass'] == p:
                 user_info = users_db[u]
+                
+                # --- التحديث السحري: توافقية الحسابات القديمة ---
+                user_role = user_info.get('role', '')
+                if user_role == 'master': user_role = 'super_admin'
+                elif user_role == 'owner': user_role = 'list_admin'
+                
                 st.session_state.update({
-                    'auth': True, 'user': u, 'role': user_info['role'], 
-                    'client': user_info['client_name'],
+                    'auth': True, 'user': u, 'role': user_role, 
+                    'client': user_info.get('client_name', 'المركز الرئيسي'),
                     'centers': user_info.get('centers', []),
                     'families': user_info.get('families', [])
                 })
-                st.rerun()
+                safe_rerun()
             else: st.error("⚠️ بيانات الدخول غير صحيحة")
 
 else:
@@ -152,7 +162,7 @@ else:
                             os.remove(f"data_{client_to_remove}.csv")
                             
                         st.success(f"تم حذف الزبون ({client_to_remove}) وتدمير بياناته بالكامل!")
-                        st.rerun()
+                        safe_rerun()
             else:
                 st.info("لا يوجد زبائن حالياً.")
                 
@@ -163,7 +173,7 @@ else:
 
         if st.button("🚪 تسجيل خروج"):
             st.session_state.auth = False
-            st.rerun()
+            safe_rerun()
 
     # ---------------------------------------------------------
     # 2. شاشة مدير القائمة
@@ -270,15 +280,11 @@ else:
                 save_client_data(df, CLIENT)
                 st.success("تم الحفظ بنجاح!")
 
-        # -------------------------------------------------------------
-        # التحديث الجديد: قسم التقارير المفصل والمقسم إلى تابين
-        # -------------------------------------------------------------
         elif menu == "📑 التقارير وطباعة الكشوفات":
             st.title("📑 استخراج وطباعة الكشوفات")
             
             tab_single, tab_multi = st.tabs(["📋 تقرير عائلة مخصص", "🎛️ تقرير مجمع (فلاتر متعددة)"])
             
-            # --- التاب الأول: تقرير العائلة المخصص ---
             with tab_single:
                 st.subheader("إصدار كشف سريع مخصص لعائلة واحدة")
                 all_unified_families = sorted(df['عائلة_موحدة'].unique())
@@ -287,17 +293,13 @@ else:
                 if selected_single_fam:
                     fam_df = df[df['عائلة_موحدة'] == selected_single_fam]
                     voted_count = len(fam_df[fam_df['حالة التصويت'] == 'تم التصويت'])
-                    
                     st.info(f"📊 **إحصائيات عائلة {selected_single_fam}:** إجمالي الناخبين ({len(fam_df)}) | صوّت ({voted_count}) | متبقي ({len(fam_df) - voted_count})")
-                    
                     st.dataframe(fam_df[['رمز الناخب', 'الاسم الرباعي', 'اسم العائلة', 'مركز التسجيل والاقتراع', 'حالة التصويت']], use_container_width=True)
                     
-                    # زر تحميل الكشف باسم العائلة
                     buf_single = BytesIO()
                     fam_df.to_excel(buf_single, index=False)
                     st.download_button("📥 تحميل كشف العائلة (Excel)", buf_single.getvalue(), f"Report_{selected_single_fam}.xlsx")
 
-            # --- التاب الثاني: التقرير المجمع ---
             with tab_multi:
                 st.subheader("إصدار كشوفات مجمعة للمدارس أو العائلات")
                 col1, col2, col3 = st.columns(3)
@@ -323,17 +325,16 @@ else:
 
         elif menu == "⚙️ إعدادات (تصفير النظام)":
             st.title("⚙️ الإعدادات الخطرة")
-            st.warning("⚠️ تحذير: هذا الزر يقوم بمسح كافة عمليات التصويت التجريبية وإعادتها إلى الصفر. يستخدم فقط في ليلة الانتخابات لبدء يوم جديد بصفحة بيضاء.")
-            
+            st.warning("⚠️ تحذير: هذا الزر يقوم بمسح كافة عمليات التصويت التجريبية وإعادتها إلى الصفر.")
             if st.button("🔄 تصفير الميدان بالكامل (مسح الأصوات)"):
                 df['حالة التصويت'] = 'لم يصوت'
                 save_client_data(df, CLIENT)
                 st.success("✅ تم تصفير جميع الأصوات! النظام جاهز ليوم الانتخابات الحقيقي.")
-                st.rerun()
+                safe_rerun()
 
         elif menu == "🚪 خروج":
             st.session_state.auth = False
-            st.rerun()
+            safe_rerun()
 
     # ---------------------------------------------------------
     # 3. شاشة المندوب الميداني
@@ -347,7 +348,7 @@ else:
             st.warning("لم يتم تعيين أي مدارس أو عائلات لك. يرجى مراجعة مدير القائمة.")
             if st.button("تسجيل خروج"):
                 st.session_state.auth = False
-                st.rerun()
+                safe_rerun()
             st.stop()
             
         mask = pd.Series(False, index=df.index)
@@ -360,7 +361,7 @@ else:
         st.sidebar.write(f"المستخدم: **{st.session_state.user}**")
         if st.sidebar.button("🚪 تسجيل خروج"):
             st.session_state.auth = False
-            st.rerun()
+            safe_rerun()
             
         st.title(f"📝 قائمة الناخبين المخصصة لك")
         
@@ -394,3 +395,10 @@ else:
             df.update(edited)
             save_client_data(df, CLIENT)
             st.success("✅ تم رفع البيانات للمدير بنجاح!")
+            
+    # في حال وجود صلاحية غير معروفة (حماية إضافية)
+    else:
+        st.error("⚠️ خطأ في النظام: لا توجد صلاحيات محددة لهذا الحساب.")
+        if st.button("تسجيل خروج"):
+            st.session_state.auth = False
+            safe_rerun()
