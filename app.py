@@ -17,33 +17,50 @@ USERS_FILE = 'clients_users.json'
 MASTER_DATA = 'Halhul_Ultimate_Perfect.csv'
 
 # =========================================================
-# 2. محرك الدوال الذكي (معالج البيانات الزاحفة + الفلتر)
+# 2. محرك الدوال الذكي (مع الشرط الدقيق الذي طلبته)
 # =========================================================
 def fix_shifted_data(row):
-    """طبيب البيانات: يعالج مشكلة زحف الاسم لعمود المدرسة"""
+    """طبيب البيانات: ينفذ الشرط الدقيق لفحص الاسم وتجميع الاسم الرباعي"""
     center = str(row.get('اسم المركز', '')).strip()
     first_name = str(row.get('الاسم الاول', '')).strip()
+    full_name = str(row.get('الاسم الرباعي', '')).strip()
     
-    # إذا كان المركز لا يبدأ بكلمة "مدرسة" وليس فارغاً (يعني حدث زحف للبيانات)
-    if center and not center.startswith('مدرسة') and center.lower() != 'nan':
-        # إذا كان عمود "الاسم الأول" موجوداً وفيه قيمة
-        if first_name and first_name.lower() != 'nan':
-            # التأكد إذا كان الاسم الأول غير موجود في بداية النص المنزلق لمنع التكرار
-            if not center.startswith(first_name):
-                row['الاسم الرباعي'] = f"{first_name} {center}"
+    # تنظيف قيم الـ nan إذا كانت موجودة
+    if center.lower() == 'nan': center = ''
+    if first_name.lower() == 'nan': first_name = ''
+    if full_name.lower() == 'nan': full_name = ''
+
+    # الشرط: إذا لم تكن أول كلمة في عمود المدرسة هي "مدرسة" (يوجد خلل وزحف)
+    if center and not center.startswith('مدرسة'):
+        
+        # نحدد النص الذي سنفحصه: إذا كان عمود "الاسم الرباعي" فارغاً، فالنص الزاحف موجود في "المركز"
+        target_text = center if not full_name else full_name
+        
+        # تفحص: هل "الاسم الأول" مكتوب قبلها أم أنها (أب + جد + عائلة) فقط؟
+        if first_name:
+            if not target_text.startswith(first_name):
+                # إذا كان اسم الأب والجد والعائلة فقط، يأخذ الاسم من عمود "الاسم الأول" وينشئ الاسم الرباعي
+                row['الاسم الرباعي'] = f"{first_name} {target_text}"
             else:
-                row['الاسم الرباعي'] = center
+                # إذا كان الاسم الأول مكتوباً قبلها بشكل صحيح
+                row['الاسم الرباعي'] = target_text
         else:
-            # إذا لم يتوفر الاسم الأول، نعتبر النص المنزلق هو الاسم الرباعي
-            row['الاسم الرباعي'] = center
+            row['الاسم الرباعي'] = target_text
             
-        # نصفر المركز لعدم وجود بيانات صحيحة له
+        # مسح عمود المدرسة لأن البيانات فيه كانت خاطئة (ليست مدرسة)
         row['اسم المركز'] = 'غير محدد'
         
+    else:
+        # كحماية إضافية: حتى لو كان عمود المدرسة صحيحاً، نفحص عمود الاسم الرباعي للتأكد من اكتماله
+        if first_name and full_name:
+            if not full_name.startswith(first_name):
+                # دمج الاسم الأول مع (الأب والجد والعائلة)
+                row['الاسم الرباعي'] = f"{first_name} {full_name}"
+
     return row
 
 def extract_and_clean_family(full_name):
-    """استخراج اسم العائلة وتطبيق التنظيف الصارم"""
+    """استخراج اسم العائلة من الاسم الرباعي المُصحح وتطبيق التنظيف"""
     if pd.isna(full_name) or not isinstance(full_name, str) or not full_name.strip():
         return "غير محدد"
     
@@ -95,11 +112,11 @@ def load_client_data(client_name):
                 df['حالة التصويت'] = 'لم يصوت'
             df.to_csv(filename, index=False, encoding='utf-8-sig')
         
-        # 1. تطبيق معالج البيانات الزاحفة أولاً
-        if not df.empty and 'اسم المركز' in df.columns:
+        # 1. تطبيق طبيب البيانات (مع الشرط المطلوب) أولاً قبل استخراج العائلة
+        if not df.empty and 'اسم المركز' in df.columns and 'الاسم الاول' in df.columns:
             df = df.apply(fix_shifted_data, axis=1)
             
-        # 2. استخراج العائلة بعد تنظيف وتصحيح الاسم الرباعي
+        # 2. استخراج العائلة بعد أن أصبح الاسم الرباعي مكتملاً وصحيحاً 100%
         if not df.empty and 'الاسم الرباعي' in df.columns:
             df['family_unified'] = df['الاسم الرباعي'].apply(extract_and_clean_family)
             if 'اسم العائلة' not in df.columns:
