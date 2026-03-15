@@ -12,7 +12,8 @@ from io import BytesIO
 st.set_page_config(page_title="نظام إدارة الحملات - الأستاذ قصي", layout="wide")
 
 USERS_FILE = 'system_users.json' 
-MASTER_FILE = 'Halhul_Ultimate_Perfect.csv.xlsx' # تم تثبيت اسم ملفك هنا!
+# الرادار الذكي للبحث عن ملفك أياً كان اسمه
+POSSIBLE_FILES = ['Halhul_Ultimate_Perfect.csv.xlsx', 'حلحول (1).xlsx - حَلْحُول.csv', 'data.csv', 'data.xlsx']
 
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
@@ -34,30 +35,33 @@ def clean_family_name(text):
     return t.strip()
 
 def process_master_file():
-    """محرك القراءة المخصص لملف Halhul_Ultimate_Perfect.csv.xlsx"""
-    if not os.path.exists(MASTER_FILE):
-        st.error(f"⚠️ الملف غير موجود! يرجى التأكد من وضع ملف ({MASTER_FILE}) في نفس المجلد مع الكود.")
+    target_file = None
+    for f in POSSIBLE_FILES:
+        if os.path.exists(f):
+            target_file = f
+            break
+            
+    if not target_file:
+        st.error("⚠️ لم يتم العثور على ملف البيانات الأساسي! تأكد من وجوده بجانب الكود.")
         return pd.DataFrame()
 
     df = pd.DataFrame()
     try:
-        # المحاولة الأولى: قراءته كملف إكسل
-        df = pd.read_excel(MASTER_FILE, dtype=str)
-    except Exception as e1:
+        if target_file.endswith('.xlsx') or target_file.endswith('.csv.xlsx'):
+            df = pd.read_excel(target_file, dtype=str)
+    except:
+        pass
+        
+    if df.empty:
         try:
-            # المحاولة الثانية: قراءته كملف CSV (لأن اسمه يحتوي على الامتدادين)
-            df = pd.read_csv(MASTER_FILE, dtype=str, encoding='utf-8')
-        except Exception as e2:
+            df = pd.read_csv(target_file, dtype=str, encoding='utf-8')
+        except:
             try:
-                df = pd.read_csv(MASTER_FILE, dtype=str, encoding='utf-8-sig')
-            except Exception as e3:
-                st.error("⚠️ فشلت قراءة الملف. يبدو أن الملف تالف أو بصيغة غير مدعومة.")
+                df = pd.read_csv(target_file, dtype=str, encoding='utf-8-sig')
+            except Exception as e:
+                st.error(f"⚠️ فشلت قراءة الملف: {e}")
                 return pd.DataFrame()
 
-    if df.empty:
-        return pd.DataFrame()
-
-    # تنظيف وتجهيز الأعمدة
     if 'مركز التسجيل والاقتراع' not in df.columns and 'اسم المركز' in df.columns:
         df.rename(columns={'اسم المركز': 'مركز التسجيل والاقتراع'}, inplace=True)
     if 'رمز الناخب' not in df.columns:
@@ -100,12 +104,7 @@ def save_client_data(df, client_name):
 def init_users_db():
     if not os.path.exists(USERS_FILE):
         db = {
-            "qusai": {
-                "pass": "851998", 
-                "role": "super_admin", 
-                "client": "المركز الرئيسي",
-                "centers": [], "families": []
-            }
+            "qusai": {"pass": "851998", "role": "super_admin", "client": "المركز الرئيسي", "centers": [], "families": []}
         }
         with open(USERS_FILE, 'w', encoding='utf-8') as f:
             json.dump(db, f, ensure_ascii=False, indent=4)
@@ -160,7 +159,6 @@ else:
     # ---------------------------------------------------------
     if ROLE == "super_admin":
         st.title("👑 لوحة تحكم النظام المركزية")
-        
         t1, t2 = st.tabs(["➕ إنشاء قائمة لزبون", "🗑️ إدارة الزبائن"])
         
         with t1:
@@ -174,16 +172,12 @@ else:
                         if new_user in users_db:
                             st.error("هذا اليوزر مستخدم من قبل!")
                         else:
-                            # 1. إنشاء الحساب
                             users_db[new_user] = {"pass": new_pass, "role": "list_admin", "client": new_list}
                             save_users_db(users_db)
-                            
-                            # 2. توليد الداتا للزبون فوراً 
                             df = get_client_data(new_list)
                             if not df.empty:
                                 st.success(f"تم إنشاء حساب القائمة ({new_list}) بنجاح! سجل خروج وادخل بحساب الزبون لترى الداشبورد.")
                             else:
-                                # التراجع في حال فشل القراءة
                                 del users_db[new_user]
                                 save_users_db(users_db)
                     else:
@@ -203,7 +197,6 @@ else:
                         if os.path.exists(f"data_{c_name}.csv"): os.remove(f"data_{c_name}.csv")
                         st.success(f"تم حذف الزبون {c_name} وكل بياناته!")
                         st.rerun()
-            
             st.divider()
             st.write("📋 القوائم الحالية:")
             st.json({k: v['client'] for k, v in users_db.items() if v['role'] == 'list_admin'})
@@ -225,7 +218,8 @@ else:
             st.stop()
             
         st.sidebar.title(f"🛡️ حملة: {CLIENT}")
-        menu = st.sidebar.radio("القائمة الرئيسية:", ["🚀 الداشبورد", "👥 المناديب", "📝 الميدان", "📑 التقارير", "⚙️ الإعدادات", "🚪 خروج"])
+        # تمت إضافة القائمة الجديدة هنا
+        menu = st.sidebar.radio("القائمة الرئيسية:", ["🚀 الداشبورد", "🤝 محاكي التحالفات والحسم", "👥 المناديب", "📝 الميدان", "📑 التقارير", "⚙️ الإعدادات", "🚪 خروج"])
 
         if menu == "🚀 الداشبورد":
             st.title("🚀 لوحة القيادة")
@@ -250,6 +244,65 @@ else:
                 st.subheader("🎯 موقف التصويت")
                 fig2 = px.pie(values=[voted, total-voted], names=['صوتوا', 'لم يصوتوا'], hole=0.5, color_discrete_sequence=['#10B981', '#EF4444'])
                 st.plotly_chart(fig2, use_container_width=True)
+
+        # ---------------- القسم الجديد: محاكي التحالفات ---------------- #
+        elif menu == "🤝 محاكي التحالفات والحسم":
+            st.title("🤝 محاكي التحالفات الاستراتيجية وإحصائيات الحسم")
+            st.markdown("استخدم هذه الأداة لبناء تحالفات افتراضية بين العائلات ومعرفة فرص اجتياز العتبة الانتخابية وعدد المقاعد المتوقعة.")
+            
+            st.subheader("1. بناء التحالف العائلي")
+            all_fams = sorted(df['عائلة_موحدة'].unique())
+            selected_fams = st.multiselect("اختر العائلات لتشكيل التحالف:", all_fams)
+            
+            commitment = st.slider("نسبة الالتزام المتوقعة لأصوات هذا التحالف (%)", min_value=10, max_value=100, value=75, step=5) / 100.0
+            
+            if selected_fams:
+                alliance_df = df[df['عائلة_موحدة'].isin(selected_fams)]
+                total_alliance_voters = len(alliance_df)
+                expected_alliance_votes = int(total_alliance_voters * commitment)
+                
+                c1, c2, c3 = st.columns(3)
+                c1.metric("إجمالي أصوات التحالف (ورقياً)", f"{total_alliance_voters:,}")
+                c2.metric("الأصوات المتوقعة (بعد الالتزام)", f"{expected_alliance_votes:,}")
+                c3.metric("نسبة التحالف من السجل العام", f"{(total_alliance_voters/len(df))*100:.1f}%")
+                
+                # رسم بياني لحجم العائلات داخل التحالف
+                st.markdown("#### 📊 تركيبة التحالف")
+                fam_counts = alliance_df['عائلة_موحدة'].value_counts().reset_index()
+                fam_counts.columns = ['العائلة', 'العدد']
+                fig_fam = px.pie(fam_counts, names='العائلة', values='العدد', hole=0.4, color_discrete_sequence=px.colors.sequential.Teal)
+                st.plotly_chart(fig_fam, use_container_width=True)
+                
+                st.divider()
+                st.subheader("2. إحصائيات الحسم وتوقع المقاعد")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    total_district_voters = st.number_input("عدد المقترعين الفعلي المتوقع في الدائرة يوم الانتخابات:", min_value=1000, value=8000, step=500)
+                with col2:
+                    total_seats = st.number_input("عدد مقاعد المجلس البلدي:", min_value=5, value=13, step=2)
+                    
+                threshold_rate = 0.08 # نسبة الحسم 8% المتعارف عليها
+                threshold_votes = int(total_district_voters * threshold_rate)
+                seat_cost = int(total_district_voters / total_seats)
+                
+                st.info(f"🚨 عتبة الحسم (8%): **{threshold_votes} صوت** | 🪑 الوزن الانتخابي للمقعد (تقريباً): **{seat_cost} صوت**")
+                
+                if expected_alliance_votes >= threshold_votes:
+                    seats_won = expected_alliance_votes // seat_cost
+                    st.success(f"🎉 **مبروك!** هذا التحالف يعبر نسبة الحسم بسهولة. المتوقع حصده: **{seats_won} مقعد/مقاعد** (كحد أدنى).")
+                    
+                    remainder = expected_alliance_votes % seat_cost
+                    progress_to_next = min(remainder / seat_cost, 1.0)
+                    st.progress(progress_to_next, text=f"التقدم نحو مقعد إضافي: نحتاج {seat_cost - remainder} صوت إضافي للحصول على مقعد جديد.")
+                else:
+                    st.error(f"⚠️ **تنبيه:** التحالف بشكله الحالي لا يعبر نسبة الحسم! يحتاج التحالف إلى {threshold_votes - expected_alliance_votes} صوت إضافي للعبور.")
+                    progress_to_threshold = min(expected_alliance_votes / threshold_votes, 1.0)
+                    st.progress(progress_to_threshold, text="نسبة الاقتراب من عتبة الحسم.")
+            else:
+                st.info("👈 يرجى اختيار عائلة واحدة أو أكثر للبدء في المحاكاة.")
+
+        # --------------------------------------------------------------- #
 
         elif menu == "👥 المناديب":
             st.title("👥 إدارة المناديب وتوزيع المهام")
