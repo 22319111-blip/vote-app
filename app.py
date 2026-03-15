@@ -6,7 +6,7 @@ import re
 from io import BytesIO
 
 # =========================================================
-# 1. إعدادات المنصة وتهيئة الجلسة
+# 1. إعدادات المنصة وقاموس المدارس الذكي
 # =========================================================
 st.set_page_config(page_title="منصة الأستاذ قصي الانتخابية", layout="wide")
 
@@ -16,111 +16,200 @@ if 'auth' not in st.session_state:
 USERS_FILE = 'clients_users.json'
 MASTER_DATA = 'Halhul_Ultimate_Perfect.csv'
 
-# =========================================================
-# 2. محرك الدوال الذكي (مع الشرط الدقيق الذي طلبته)
-# =========================================================
-def fix_shifted_data(row):
-    """طبيب البيانات: ينفذ الشرط الدقيق لفحص الاسم وتجميع الاسم الرباعي"""
-    center = str(row.get('اسم المركز', '')).strip()
-    first_name = str(row.get('الاسم الاول', '')).strip()
-    full_name = str(row.get('الاسم الرباعي', '')).strip()
+# === القاموس الذكي للمراكز ===
+KNOWN_CENTERS = [
+    "بنات حلحول الثانوية", "ذكور حلحول الثانوية", "اليرموك الأساسية",
+    "بنات محمود السنجق", "القادسية", "الرشيد", "اليرموك",
+    "بنات حلحول", "ذكور حلحول", "بلدية حلحول"
+]
+KNOWN_CENTERS.sort(key=len, reverse=True)
+
+# === فلتر الشظايا ===
+SCHOOL_KEYWORDS = [
+    'مدرسة', 'ذكور', 'اناث', 'إناث', 'بنات', 'بنين', 'للبنين', 'للبنات', 
+    'ثانوية', 'الثانوية', 'اساسية', 'الاساسية', 'أساسية', 'الأساسية', 
+    'مختلطة', 'المختلطة', 'اعدادية', 'الاعدادية', 'ابتدائية', 'الابتدائية'
+]
+
+def is_school_text(text):
+    if 'مدرسة' in text: return True
+    return any(c in text for c in KNOWN_CENTERS)
+
+def extract_actual_school(text):
+    match = re.search(r'(مدرسة.*?(بنين|بنات|ثانوية|أساسية|اساسية|مختلطة))', text)
+    if match: return match.group(1)
+    for center in KNOWN_CENTERS:
+        if center in text: return center
+    return ""
+
+def deep_clean_name(name_text, actual_school=""):
+    """دالة التنظيف العميق لإزالة اسم المدرسة وشظاياها"""
+    if not isinstance(name_text, str): return ""
     
-    # تنظيف قيم الـ nan إذا كانت موجودة
-    if center.lower() == 'nan': center = ''
-    if first_name.lower() == 'nan': first_name = ''
-    if full_name.lower() == 'nan': full_name = ''
+    if actual_school:
+        name_text = name_text.replace(actual_school, ' ')
+        
+    for c in KNOWN_CENTERS:
+        name_text = name_text.replace(c, ' ')
+        
+    for kw in SCHOOL_KEYWORDS:
+        name_text = re.sub(fr'\b{kw}\b', ' ', name_text)
+        
+    return re.sub(r'\s+', ' ', name_text).strip()
 
-    # الشرط: إذا لم تكن أول كلمة في عمود المدرسة هي "مدرسة" (يوجد خلل وزحف)
-    if center and not center.startswith('مدرسة'):
+# =========================================================
+# 2. الماسح الشامل الموجه بدقة
+# =========================================================
+def fix_all_shifted_data(df):
+    df = df.reset_index(drop=True)
+    
+    for i in df.index:
+        center_raw = str(df.loc[i, 'اسم المركز']).strip()
+        first_name = str(df.loc[i, 'الاسم الاول']).strip()
+        full_name_raw = str(df.loc[i, 'الاسم الرباعي']).strip()
         
-        # نحدد النص الذي سنفحصه: إذا كان عمود "الاسم الرباعي" فارغاً، فالنص الزاحف موجود في "المركز"
-        target_text = center if not full_name else full_name
-        
-        # تفحص: هل "الاسم الأول" مكتوب قبلها أم أنها (أب + جد + عائلة) فقط؟
-        if first_name:
-            if not target_text.startswith(first_name):
-                # إذا كان اسم الأب والجد والعائلة فقط، يأخذ الاسم من عمود "الاسم الأول" وينشئ الاسم الرباعي
-                row['الاسم الرباعي'] = f"{first_name} {target_text}"
-            else:
-                # إذا كان الاسم الأول مكتوباً قبلها بشكل صحيح
-                row['الاسم الرباعي'] = target_text
-        else:
-            row['الاسم الرباعي'] = target_text
+        if center_raw.lower() == 'nan': center_raw = ''
+        if first_name.lower() == 'nan': first_name = ''
+        if full_name_raw.lower() == 'nan': full_name_raw = ''
+
+        # ==================================================================
+        # المرحلة 1: إنقاذ "الاسم الأول" (الماسح العمودي يعمل هنا فقط!)
+        # ==================================================================
+        if is_school_text(first_name):
+            actual_school = extract_actual_school(first_name)
             
-        # مسح عمود المدرسة لأن البيانات فيه كانت خاطئة (ليست مدرسة)
-        row['اسم المركز'] = 'غير محدد'
-        
-    else:
-        # كحماية إضافية: حتى لو كان عمود المدرسة صحيحاً، نفحص عمود الاسم الرباعي للتأكد من اكتماله
-        if first_name and full_name:
-            if not full_name.startswith(first_name):
-                # دمج الاسم الأول مع (الأب والجد والعائلة)
-                row['الاسم الرباعي'] = f"{first_name} {full_name}"
+            # الماسح العمودي: لأن خلية "الاسم الأول" تحتوي على مدرسة، نستنتج المركز من الجيران إذا لزم الأمر
+            if not actual_school:
+                prev_school = str(df.loc[i-1, 'اسم المركز']).strip() if i > 0 else ""
+                next_school = str(df.loc[i+1, 'اسم المركز']).strip() if i < len(df) - 1 else ""
+                if is_school_text(prev_school) and is_school_text(next_school) and prev_school == next_school:
+                    actual_school = prev_school
+            
+            # إذا فشل الماسح العمودي، نبحث في الاسم الرباعي
+            if not actual_school:
+                found_in_full = extract_actual_school(full_name_raw)
+                if found_in_full:
+                    actual_school = found_in_full
 
-    return row
+            # استخلاص النص الذي يأتي "بعد" المدرسة (إن وجد)
+            remaining_after_school = deep_clean_name(first_name, actual_school)
+            
+            # التقاط الكلمة الأولى بعد المدرسة كاسم أول
+            if remaining_after_school:
+                words = remaining_after_school.split()
+                first_name = words[0]
+            else:
+                first_name = "" 
+
+            df.loc[i, 'الاسم الاول'] = first_name
+            if actual_school and not is_school_text(center_raw):
+                center_raw = actual_school
+
+        # ==================================================================
+        # المرحلة 2: تنظيف المركز والاسم الرباعي 
+        # ==================================================================
+        # هنا تم إزالة الماسح العمودي بناءً على توجيهك (يعمل فقط للاسم الأول)
+        if is_school_text(center_raw) or is_school_text(full_name_raw):
+            actual_school = extract_actual_school(center_raw)
+            if not actual_school: actual_school = extract_actual_school(full_name_raw)
+
+            remaining_text = deep_clean_name(center_raw, actual_school)
+            clean_full = deep_clean_name(full_name_raw, actual_school)
+
+            # إذا كان الاسم الأول فارغاً وهناك نص متبقي
+            if remaining_text and not first_name:
+                first_name = remaining_text.split()[0]
+                df.loc[i, 'الاسم الاول'] = first_name
+
+            if remaining_text: 
+                words = remaining_text.split()
+                if len(words) >= 4:
+                    df.loc[i, 'الاسم الرباعي'] = remaining_text
+                else:
+                    if first_name and not remaining_text.startswith(first_name):
+                        df.loc[i, 'الاسم الرباعي'] = f"{first_name} {remaining_text}".strip()
+                    else:
+                        df.loc[i, 'الاسم الرباعي'] = remaining_text
+            else:
+                if clean_full and not first_name:
+                    first_name = clean_full.split()[0]
+                    df.loc[i, 'الاسم الاول'] = first_name
+                    
+                words_full = clean_full.split()
+                if len(words_full) >= 4:
+                    df.loc[i, 'الاسم الرباعي'] = clean_full
+                elif len(words_full) > 0 and len(words_full) <= 3:
+                    if first_name and not clean_full.startswith(first_name):
+                        df.loc[i, 'الاسم الرباعي'] = f"{first_name} {clean_full}".strip()
+                    else:
+                        df.loc[i, 'الاسم الرباعي'] = clean_full
+
+            df.loc[i, 'اسم المركز'] = actual_school if actual_school else 'غير محدد'
+
+        # ==================================================================
+        # المرحلة 3: زحف كامل (لا مدرسة ولا اسم مركز معروف)
+        # ==================================================================
+        elif center_raw and not is_school_text(center_raw) and center_raw != 'غير محدد':
+            words = center_raw.split()
+            if len(words) >= 4:
+                df.loc[i, 'الاسم الرباعي'] = center_raw
+            else:
+                if first_name and not center_raw.startswith(first_name):
+                    df.loc[i, 'الاسم الرباعي'] = f"{first_name} {center_raw}".strip()
+                else:
+                    df.loc[i, 'الاسم الرباعي'] = center_raw
+            
+            df.loc[i, 'اسم المركز'] = 'غير محدد'
+
+    return df
 
 def extract_and_clean_family(full_name):
-    """استخراج اسم العائلة من الاسم الرباعي المُصحح وتطبيق التنظيف"""
-    if pd.isna(full_name) or not isinstance(full_name, str) or not full_name.strip():
-        return "غير محدد"
+    if pd.isna(full_name) or not isinstance(full_name, str) or not full_name.strip(): return "غير محدد"
     
     clean_name = re.sub(r'\s+', ' ', full_name.strip())
     words = clean_name.split()
     
-    if len(words) == 1:
-        fam = words[0]
+    if len(words) == 1: fam = words[0]
     else:
         prefixes = ['ابو', 'أبو', 'عبد', 'بن', 'بني', 'آل', 'الحاج', 'حاج', 'ام', 'أم']
-        if words[-2] in prefixes:
-            fam = f"{words[-2]} {words[-1]}"
-        else:
-            fam = words[-1]
+        if words[-2] in prefixes: fam = f"{words[-2]} {words[-1]}"
+        else: fam = words[-1]
             
     fam = re.sub(r'[أإآ]', 'ا', fam)
     fam = re.sub(r'ة\b', 'ه', fam)
     fam = re.sub(r'^ال', '', fam)
     fam = re.sub(r'\s+ال', ' ', fam)
     fam = re.sub(r'\s+', ' ', fam).strip()
-    
     return fam
 
 def load_users():
     if not os.path.exists(USERS_FILE):
         default = {"qusai": {"pass": "851998", "role": "master", "client_name": "الإدارة العامة", "is_temp": False}}
-        with open(USERS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(default, f, ensure_ascii=False, indent=4)
+        with open(USERS_FILE, 'w', encoding='utf-8') as f: json.dump(default, f, ensure_ascii=False, indent=4)
         return default
-    with open(USERS_FILE, 'r', encoding='utf-8') as f:
-        return json.load(f)
+    with open(USERS_FILE, 'r', encoding='utf-8') as f: return json.load(f)
 
 def save_users(u_dict):
-    with open(USERS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(u_dict, f, ensure_ascii=False, indent=4)
+    with open(USERS_FILE, 'w', encoding='utf-8') as f: json.dump(u_dict, f, ensure_ascii=False, indent=4)
 
 def load_client_data(client_name):
     filename = f"data_{client_name}.csv"
     try:
-        if os.path.exists(filename):
-            df = pd.read_csv(filename, dtype=str, keep_default_na=False)
+        if os.path.exists(filename): df = pd.read_csv(filename, dtype=str, keep_default_na=False)
         else:
             if not os.path.exists(MASTER_DATA):
                 dummy = pd.DataFrame({"الاسم الاول": ["أحمد"], "الاسم الرباعي": ["أحمد محمد علي"], "اسم المركز": ["مدرسة ١"], "حالة التصويت": ["لم يصوت"]})
                 dummy.to_csv(MASTER_DATA, index=False, encoding='utf-8-sig')
-            
             df = pd.read_csv(MASTER_DATA, dtype=str, keep_default_na=False)
-            if 'حالة التصويت' not in df.columns:
-                df['حالة التصويت'] = 'لم يصوت'
+            if 'حالة التصويت' not in df.columns: df['حالة التصويت'] = 'لم يصوت'
             df.to_csv(filename, index=False, encoding='utf-8-sig')
         
-        # 1. تطبيق طبيب البيانات (مع الشرط المطلوب) أولاً قبل استخراج العائلة
         if not df.empty and 'اسم المركز' in df.columns and 'الاسم الاول' in df.columns:
-            df = df.apply(fix_shifted_data, axis=1)
+            df = fix_all_shifted_data(df)
             
-        # 2. استخراج العائلة بعد أن أصبح الاسم الرباعي مكتملاً وصحيحاً 100%
         if not df.empty and 'الاسم الرباعي' in df.columns:
             df['family_unified'] = df['الاسم الرباعي'].apply(extract_and_clean_family)
-            if 'اسم العائلة' not in df.columns:
-                df['اسم العائلة'] = df['family_unified']
+            if 'اسم العائلة' not in df.columns: df['اسم العائلة'] = df['family_unified']
                 
         return df
     except Exception as e:
@@ -130,8 +219,7 @@ def load_client_data(client_name):
 def save_client_data(df, client_name):
     filename = f"data_{client_name}.csv"
     temp = df.copy()
-    if 'family_unified' in temp.columns:
-        temp = temp.drop(columns=['family_unified'])
+    if 'family_unified' in temp.columns: temp = temp.drop(columns=['family_unified'])
     temp.to_csv(filename, index=False, encoding='utf-8-sig')
 
 # =========================================================
@@ -147,13 +235,9 @@ if not st.session_state.auth:
         p_in = st.text_input("كلمة المرور", type="password")
         if st.button("دخول آمن", use_container_width=True):
             if u_in in users_db and users_db[u_in]['pass'] == p_in:
-                st.session_state.update({
-                    'auth': True, 'user': u_in, 'role': users_db[u_in]['role'],
-                    'client': users_db[u_in]['client_name'], 'is_temp': users_db[u_in].get('is_temp', False)
-                })
+                st.session_state.update({'auth': True, 'user': u_in, 'role': users_db[u_in]['role'], 'client': users_db[u_in]['client_name'], 'is_temp': users_db[u_in].get('is_temp', False)})
                 st.rerun()
-            else:
-                st.error("⚠️ بيانات الدخول غير صحيحة")
+            else: st.error("⚠️ بيانات الدخول غير صحيحة")
 else:
     # =========================================================
     # 4. الواجهة الرئيسية
@@ -212,24 +296,18 @@ else:
     # --- الشاشات ---
     if menu == "📊 الإحصائيات":
         st.header(f"📊 إحصائيات: {CLIENT}")
-        if 'حالة التصويت' in df_full.columns:
-            voted = len(df_full[df_full['حالة التصويت'] == 'تم التصويت'])
-        else:
-            voted = 0
+        if 'حالة التصويت' in df_full.columns: voted = len(df_full[df_full['حالة التصويت'] == 'تم التصويت'])
+        else: voted = 0
             
         c1, c2, c3 = st.columns(3)
         c1.metric("الكتلة الناخبة", len(df_full) if not IS_TEMP else "100 (تجريبي)")
         c2.metric("عدد المصوتين", voted)
         c3.metric("نسبة التصويت", f"{(voted/len(df_full))*100:.1f}%" if len(df_full) > 0 else "0%")
         
-        if IS_TEMP:
-            st.warning("🔒 التحليلات العائلية محجوبة في النسخة التجريبية.")
+        if IS_TEMP: st.warning("🔒 التحليلات العائلية محجوبة في النسخة التجريبية.")
         elif 'family_unified' in df_full.columns:
             st.subheader("📌 التزام العائلات (مستخرج آلياً ومصحح)")
-            stats = df_full.groupby('family_unified').agg(
-                total=('الاسم الرباعي','count'), 
-                voted=('حالة التصويت', lambda x: (x=='تم التصويت').sum())
-            ).reset_index()
+            stats = df_full.groupby('family_unified').agg(total=('الاسم الرباعي','count'), voted=('حالة التصويت', lambda x: (x=='تم التصويت').sum())).reset_index()
             stats.rename(columns={'family_unified': 'اسم العائلة', 'total': 'العدد الكلي', 'voted': 'المصوتون'}, inplace=True)
             stats['نسبة الحضور %'] = (stats['المصوتون']/stats['العدد الكلي']*100).round(1)
             st.dataframe(stats.sort_values(by='العدد الكلي', ascending=False), use_container_width=True)
@@ -262,23 +340,16 @@ else:
                 st.success("تم الحفظ بنجاح!")
 
     elif menu == "📑 التقارير والطباعة":
-        if IS_TEMP: 
-            st.error("🚫 الطباعة معطلة للحسابات التجريبية.")
+        if IS_TEMP: st.error("🚫 الطباعة معطلة للحسابات التجريبية.")
         else:
             st.header("📑 التقارير والكشوفات")
-            
-            # ميزة ساعات الحسم: فلترة من لم يصوت
             unvoted_only = st.checkbox("🚨 عرض الذين لم يصوتوا فقط (لساعات الحسم)", value=False)
-            
             rep = df_full.copy()
-            if unvoted_only and 'حالة التصويت' in rep.columns:
-                rep = rep[rep['حالة التصويت'] != 'تم التصويت']
+            if unvoted_only and 'حالة التصويت' in rep.columns: rep = rep[rep['حالة التصويت'] != 'تم التصويت']
                 
             if 'family_unified' in rep.columns:
                 sel_f = st.multiselect("فلترة حسب العائلة:", sorted(df_full['family_unified'].astype(str).unique()))
-                if sel_f:
-                    rep = rep[rep['family_unified'].isin(sel_f)]
-                
+                if sel_f: rep = rep[rep['family_unified'].isin(sel_f)]
                 cols_to_show = [c for c in ['الاسم الرباعي', 'اسم العائلة', 'اسم المركز', 'حالة التصويت'] if c in rep.columns]
                 st.dataframe(rep[cols_to_show] if cols_to_show else rep, use_container_width=True)
                 
